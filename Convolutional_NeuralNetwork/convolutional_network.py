@@ -1,5 +1,5 @@
-from layers import *
-from optimizer import SGD
+from .layers import *
+from .optimizer import SGD
 
 class Convolutional_Neural_Network:
     

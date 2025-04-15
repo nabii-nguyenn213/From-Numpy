@@ -32,7 +32,7 @@ class Convolutional:
         self.weights = self.generate_kernel()
     
     def generate_kernel(self):
-        print("genearate filters")
+        # print("genearate filters")
         if self.input_shape != -1:
             return np.random.rand(self.num_filter, self.kernel_size[0], self.kernel_size[1], self.input_shape[-1])
     
@@ -269,7 +269,7 @@ class Dense_Layer:
         
     
     def initialize_weights(self, uniform = True):
-        print("generate weights")
+        # print("generate weights")
         if uniform:
             limit = np.sqrt(6 / (self.dim[0] + self.dim[1]))
             w = np.random.uniform(-limit, limit, (self.dim[0], self.dim[1]))
