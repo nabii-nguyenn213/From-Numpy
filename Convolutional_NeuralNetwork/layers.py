@@ -105,7 +105,6 @@ class Convolutional:
         self.backward_cache['dZ'] = dL_dZ
         self.backward_cache['dW'] = dL_dW
 
-    
 # ! Max Pooling class 
 class MaxPooling:
     
