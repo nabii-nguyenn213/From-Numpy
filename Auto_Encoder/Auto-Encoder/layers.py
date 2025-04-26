@@ -2,28 +2,30 @@ import numpy as np
 import math
 
 def stable_sigmoid(x):
-    # Use different branches to avoid overflow
     x = x.astype(np.longdouble)
     out = np.empty_like(x)
 
-    # x >= 0
     pos_mask = x >= 0
     out[pos_mask] = 1 / (1 + np.exp(-x[pos_mask]))
 
-    # x < 0: reformulate to avoid overflow
     neg_mask = ~pos_mask
     exp_x = np.exp(x[neg_mask])
     out[neg_mask] = exp_x / (1 + exp_x)
-
     return out
 
 class Layers:
     
-    def Convo(num_filter, kernel_size = (3, 3), activation = 'relu', stride = 1, padding = 'valid', input_shape = -1):
-        return Convolutional(num_filter=num_filter, kernel_size=kernel_size, activation=activation, stride=stride, padding=padding, input_shape=input_shape)
+    def Convo(num_filter, kernel_size = (3, 3), activation = 'relu', stride = 1, padding = 'valid', input_shape = -1, initialize = None):
+        return Convolutional(num_filter=num_filter, kernel_size=kernel_size, activation=activation, stride=stride, padding=padding, input_shape=input_shape, initialize=initialize)
     
-    def ConvoTranspose(num_filter, kernel_size=(3, 3), activation='relu', stride=1, padding='valid', input_shape=-1):
-        return ConvTranspose_Layer(num_filter=num_filter, kernel_size=kernel_size, activation=activation, stride=stride, padding=padding, input_shape=input_shape)
+    def ConvoTranspose(num_filter, kernel_size=(3, 3), activation='relu', stride=1, padding='valid', input_shape=-1, initialize = None):
+        return ConvTranspose_Layer(num_filter=num_filter, kernel_size=kernel_size, activation=activation, stride=stride, padding=padding, input_shape=input_shape, initialize=initialize)
+
+    def MaxPooling(pool_size=(2, 2), stride=2):
+        return MaxPooling_Layer(pool_size=pool_size, stride=stride)
+
+    def Upsample(size=(2, 2)):
+        return Upsample_Layer(size=size)
     
     def Flatten():
         return Flatten_Layer()
@@ -33,11 +35,14 @@ class Layers:
     
     def Dense(dim, activation = 'linear', train_bias = True, xavier_uniform = True):
         return Dense_Layer(dim=dim, activation=activation, train_bias=train_bias, xavier_uniform=xavier_uniform)
+
+    def BatchNorm(epsilon=1e-5, momentum=0.9, num_channels=-1):
+        return BatchNormalization(epsilon=epsilon, momentum=momentum, num_channels=num_channels)
     
 # ! Convolutional class
 class Convolutional:
     
-    def __init__(self, num_filter, kernel_size = (3, 3), activation = 'relu', stride = 1, padding = 'valid', input_shape = -1):
+    def __init__(self, num_filter, kernel_size = (3, 3), activation = 'relu', stride = 1, padding = 'valid', input_shape = -1, initialize = None):
         self.num_filter = num_filter
         self.kernel_size = kernel_size
         self.activation = activation
@@ -46,19 +51,56 @@ class Convolutional:
         self.input_shape = input_shape
         self.forward_cache = {}
         self.backward_cache = {}
-        self.weights = self.generate_kernel()
+        self.weights = self.generate_kernel(initialize=initialize)
     
-    def generate_kernel(self):
+    def generate_kernel(self, initialize):
         # print("genearate filters")
         if self.input_shape != -1:
-            return np.random.rand(self.num_filter, self.kernel_size[0], self.kernel_size[1], self.input_shape[-1])
+            if initialize == None:
+                return np.random.rand(self.num_filter, self.kernel_size[0], self.kernel_size[1], self.input_shape[-1])
+            elif initialize == 'he':
+                k_h, k_w = self.kernel_size
+                in_channels = self.input_shape[-1]  # usually: (H, W, C)
+                fan_in = k_h * k_w * in_channels
+                std = np.sqrt(2.0 / fan_in)
+                # Shape: (num_filters, kernel_height, kernel_width, in_channels)
+                return np.random.normal(0, std, size=(self.num_filter, k_h, k_w, in_channels))
+            elif initialize == 'xavier':
+                k_h, k_w = self.kernel_size
+                in_channels = self.input_shape[-1]
+                out_channels = self.num_filter
+                fan_in = k_h * k_w * in_channels
+                fan_out = k_h * k_w * out_channels
+                limit = np.sqrt(6 / (fan_in + fan_out))
+                return np.random.uniform(-limit, limit, size=(out_channels, k_h, k_w, in_channels))
     
     def activate(self, input_img):
         if self.activation == 'relu':
             return np.maximum(0, input_img)
+        elif self.activation == 'leakyrelu':
+            alpha = 0.01
+            return np.where(input_img>0, input_img, alpha*input_img)
         elif self.activation == 'tanh':
             return np.tanh(input_img)
-    
+        elif self.activation == 'sigmoid':
+            input_img = input_img.astype(np.longdouble)
+            return stable_sigmoid(x=input_img)
+        else:
+            return input_img
+
+    def activation_derivative(self, x):
+        if self.activation == "relu":
+            return np.where(x < 0, 0, 1)
+        elif self.activation == 'leakyrelu':
+            alpha = 0.01
+            return np.where(x>0, 1, alpha)
+        elif self.activation == "sigmoid":
+            activated=self.activate(x)
+            return activated * (1 - activated)
+        elif self.activation == "tanh":
+            return 1 - np.tanh(x) ** 2
+        else:
+            return np.ones(x.shape)
     def forward(self, input_img, input_shape=-1, predict=False):
         batch_size, input_height, input_width, input_channel = input_img.shape
 
@@ -107,14 +149,11 @@ class Convolutional:
 
         return output
     
-    def backprop(self, previous_layer_cache, next_layer_cache, *args, **kwargs):
+    def backprop(self, previous_layer_cache=None, next_layer_cache=None, weights_next_layer=None, output_layer=None):
         X = previous_layer_cache['output']             # (batch, H_in, W_in, C_in)
-        dA = next_layer_cache['dZ']                    # (batch, H_out, W_out, C_out)
+        dA = next_layer_cache['dZ'] if next_layer_cache else output_layer                   # (batch, H_out, W_out, C_out)
         A = self.forward_cache['output']            
-        if self.activation == 'relu':
-            dZ = dA * (A > 0).astype(float)
-        else:  # tanh
-            dZ = dA * (1 - A**2)
+        dZ = dA * self.activation_derivative(A)
 
         batch, H_in, W_in, C_in = X.shape
         kH, kW = self.kernel_size
@@ -159,7 +198,7 @@ class Convolutional:
     
 # ! Convolutional Transpose Layer
 class ConvTranspose_Layer:
-    def __init__(self, num_filter, kernel_size=(3, 3), activation='relu', stride=1, padding='valid', input_shape=-1):
+    def __init__(self, num_filter, kernel_size=(3, 3), activation='relu', stride=1, padding='valid', input_shape=-1, initialize = None):
         self.num_filter = num_filter
         self.kernel_size = kernel_size
         self.activation = activation
@@ -168,23 +207,40 @@ class ConvTranspose_Layer:
         self.input_shape = input_shape
         self.forward_cache = {}
         self.backward_cache = {}
-        self.weights = self.generate_kernel()
+        self.weights = self.generate_kernel(initialize=initialize)
 
-    def generate_kernel(self):
+    def generate_kernel(self, initialize):
         # weights shape: (out_channels, kh, kw, in_channels)
         if self.input_shape != -1:
-            in_ch = self.input_shape[-1]
-            kh, kw = self.kernel_size
-            return np.random.randn(self.num_filter, kh, kw, in_ch) * 0.01
+            if initialize == None:
+                in_ch = self.input_shape[-1]
+                kh, kw = self.kernel_size
+                return np.random.randn(self.num_filter, kh, kw, in_ch) * 0.01
+            elif initialize == 'he':
+                k_h, k_w = self.kernel_size
+                in_channels = self.input_shape[-1]  # Usually NHWC format
+                fan_in = k_h * k_w * in_channels
+                std = np.sqrt(2.0 / fan_in)
+                return np.random.normal(0, std, size=(self.num_filter, k_h, k_w, in_channels))
+            elif initialize == 'xavier':
+                k_h, k_w = self.kernel_size
+                in_channels = self.input_shape[-1]
+                out_channels = self.num_filter  # number of filters = output channels
+                fan_in = k_h * k_w * in_channels
+                fan_out = k_h * k_w * out_channels
+                limit = np.sqrt(6 / (fan_in + fan_out))
+                return np.random.uniform(-limit, limit, size=(out_channels, k_h, k_w, in_channels))
 
     def activate(self, x):
         if self.activation == 'relu':
             return np.maximum(0, x)
+        elif self.activation == 'leakyrelu':
+            alpha = 0.01 
+            return np.where(x>0, x, x*alpha)
         elif self.activation == 'tanh':
             return np.tanh(x)
         elif self.activation == 'sigmoid':
             x = x.astype(np.longdouble)
-            # return 1/(1+np.exp(-x))
             return stable_sigmoid(x)
         else:
             return x
@@ -192,6 +248,9 @@ class ConvTranspose_Layer:
     def activation_derivative(self, raw, activated):
         if self.activation == 'relu':
             return (raw > 0).astype(raw.dtype)
+        elif self.activation == 'leakyrelu':
+            alpha=0.01
+            return np.where(raw>0, 1, alpha)
         elif self.activation == 'tanh':
             return 1 - np.square(activated)
         elif self.activation == 'sigmoid':
@@ -251,16 +310,13 @@ class ConvTranspose_Layer:
 
     def backprop(self, previous_layer_cache = None, next_layer_cache=None, weights_next_layer=None, output_layer=None):
         X = self.forward_cache['input']  # (N, H_in, W_in, C_in)
+
         raw_out = self.forward_cache['raw_output']
         act_out = self.forward_cache['output']
 
-        if next_layer_cache is not None:
-            dOut = next_layer_cache['dZ']
-        elif output_layer is not None:
-            dOut = output_layer
-        else:
-            raise ValueError("Need gradients from next layer or output_layer.")
-
+        dOut = next_layer_cache['dZ'] if next_layer_cache is not None else output_layer
+        # print("dOut shape :", dOut.shape)
+        # print("derivative shape :", self.activation_derivative(raw_out, act_out).shape)
         dZ = dOut * self.activation_derivative(raw_out, act_out)
 
         N, H_in, W_in, C_in = X.shape
@@ -299,7 +355,108 @@ class ConvTranspose_Layer:
 
         self.backward_cache['dZ'] = dX
         self.backward_cache['dW'] = dW
-    
+
+# ! Max-Pooling layer
+class MaxPooling_Layer:
+
+    def __init__(self, pool_size=(2, 2), stride=None):
+        self.pool_size = pool_size
+        self.stride = stride if stride is not None else pool_size
+        self.weights = None
+        self.forward_cache = {}
+        self.backward_cache = {}
+
+    def forward(self, input_img, input_shape=-1, predict=False):
+        # input_img: (batch, H_in, W_in, C)
+        batch, H_in, W_in, C = input_img.shape
+        ph, pw = self.pool_size
+        sh, sw = self.stride if isinstance(self.stride, tuple) else (self.stride, self.stride)
+
+        H_out = (H_in - ph) // sh + 1
+        W_out = (W_in - pw) // sw + 1
+        output = np.zeros((batch, H_out, W_out, C))
+        mask = np.zeros_like(input_img, dtype=bool)
+
+        for b in range(batch):
+            for i in range(H_out):
+                for j in range(W_out):
+                    h0 = i * sh
+                    w0 = j * sw
+                    region = input_img[b, h0:h0+ph, w0:w0+pw, :]
+                    # get max values and mask
+                    max_vals = np.max(region, axis=(0, 1))
+                    output[b, i, j, :] = max_vals
+                    # create mask for backprop
+                    for c in range(C):
+                        # boolean mask of where region equals max
+                        region_mask = (region[:, :, c] == max_vals[c])
+                        mask[b, h0:h0+ph, w0:w0+pw, c] |= region_mask
+
+        if not predict:
+            self.forward_cache['mask'] = mask
+            self.forward_cache['input_shape'] = input_img.shape
+            self.forward_cache['dZ'] = None
+            self.forward_cache['output'] = output
+
+        return output
+
+    def backprop(self, previous_layer_cache=None, next_layer_cache=None,
+                 weights_next_layer=None, output_layer=None):
+        # collect upstream gradient
+        dA = next_layer_cache.get('dZ')
+        mask = self.forward_cache['mask']
+        dX = np.zeros(self.forward_cache['input_shape'], dtype=float)
+        # distribute gradients to max locations
+        batch, H_out, W_out, C = dA.shape
+        ph, pw = self.pool_size
+        sh, sw = self.stride if isinstance(self.stride, tuple) else (self.stride, self.stride)
+
+        for b in range(batch):
+            for i in range(H_out):
+                for j in range(W_out):
+                    h0 = i * sh
+                    w0 = j * sw
+                    for c in range(C):
+                        # only positions that were max get gradient
+                        region_mask = mask[b, h0:h0+ph, w0:w0+pw, c]
+                        dX[b, h0:h0+ph, w0:w0+pw, c] += region_mask * dA[b, i, j, c]
+
+        self.backward_cache['dZ'] = dX
+
+# ! Upsample layer
+class Upsample_Layer:
+
+    def __init__(self, size=(2, 2)):
+        self.size = size
+        self.forward_cache = {}
+        self.backward_cache = {}
+        self.weights = None
+
+    def forward(self, input_img, input_shape=-1, predict=False):
+        batch, H, W, C = input_img.shape
+        sh, sw = self.size if isinstance(self.size, tuple) else (self.size, self.size)
+        output = np.repeat(np.repeat(input_img, sh, axis=1), sw, axis=2)
+
+        if not predict:
+            self.forward_cache['input_shape'] = input_img.shape
+            self.forward_cache['output'] = output
+
+        return output
+
+    def backprop(self, previous_layer_cache=None, next_layer_cache=None,
+                 weights_next_layer=None, output_layer=None):
+        dA = next_layer_cache.get('dZ')
+        batch, H, W, C = self.forward_cache['input_shape']
+        sh, sw = self.size if isinstance(self.size, tuple) else (self.size, self.size)
+        dX = np.zeros((batch, H, W, C), dtype=float)
+
+        for i in range(H):
+            for j in range(W):
+                block = dA[:, i*sh:(i*sh+sh), j*sw:(j*sw+sw), :]
+                dX[:, i, j, :] = np.sum(block, axis=(1, 2))
+
+        self.backward_cache['dZ'] = dX
+
 # ! Flatten class
 class Flatten_Layer:
 
@@ -356,10 +513,13 @@ class UnFlatten_Layer:
             self.backward_cache['dA'] = dA 
             self.backward_cache['dZ'] = dZ 
 
+# ! BatchNorm layer
+
+
 # ! Dense class
 class Dense_Layer:
     
-    def __init__(self, dim, activation = 'linear', train_bias = True, xavier_uniform = True):
+    def __init__(self, dim, activation = 'linear', train_bias = True, xavier_uniform = False):
         self.dim = dim
         self.activation = activation
         self.train_bias = train_bias
@@ -390,6 +550,9 @@ class Dense_Layer:
     def activation_function(x, function):
         if function == "relu":
             return np.maximum(0, x)
+        elif function == 'leakyrelu':
+            alpha = 0.01
+            return np.where(x > 0, x, alpha * x)
         elif function == "sigmoid":
             x = x.astype(np.longdouble)
             return stable_sigmoid(x)
@@ -405,6 +568,9 @@ class Dense_Layer:
     def derivative_activation_function(x, function):
         if function == "relu":
             return np.where(x < 0, 0, 1)
+        elif function == 'leakyrelu':
+            alpha= 0.01
+            return np.where(x > 0, 1, alpha)
         elif function == "sigmoid":
             return Dense_Layer.activation_function(x, function) * (1 - Dense_Layer.activation_function(x, function))
         elif function == "tanh":
@@ -461,3 +627,69 @@ class Dense_Layer:
         self.backward_cache['dW'] = dW
         if hasattr(self, 'bias'):
             self.backward_cache['db'] = db
+
+# ! BatchNormalization Layer
+class BatchNormalization:
+
+    def __init__(self, epsilon=1e-5, momentum=.9, num_channels=-1):
+        self.epsilon = epsilon
+        self.momentum = momentum
+        self.num_channels = num_channels
+        
+        self.weights = np.ones((1, 1, 1, num_channels)) # gamma 
+        
+        self.running_var = np.ones((1, 1, 1, num_channels))
+        self.running_mean = np.zeros((1, 1, 1, num_channels))
+
+        self.forward_cache = {}
+        self.backward_cache = {}
+
+    def forward(self, input_img, input_shape, predict = False):
+        batch_size, height, width, channels = input_img.shape
+
+        if not predict: # training
+            mean = np.mean(input_img, axis = (0, 1, 2), keepdims=True)
+            var = np.var(input_img, axis=(0, 1, 2), keepdims=True)
+
+            # Update running mean and variance (moving averages)
+            self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * mean
+            self.running_var = self.momentum * self.running_var + (1 - self.momentum) * var
+        else : 
+            mean = self.running_mean
+            var = self.running_var
+
+        self.forward_cache['mean'] = mean
+        self.forward_cache['var'] = var
+        self.forward_cache['input'] = input_img
+
+        input_norm = (input_img - mean) / np.sqrt(var + self.epsilon)
+
+        # Step 3: Scale and shift the normalized input
+        output = self.weights * input_norm
+
+        self.forward_cache['normalized'] = input_norm
+        self.forward_cache['output'] = output
+        self.forward_cache['weights'] = self.weights
+
+        return output
+
+    def backprop(self, previous_layer_cache=None, next_layer_cache=None, weights_next_layer=None, output_layer=None):
+        batch_size, height, width, channels = self.forward_cache['input'].shape
+        mean = self.forward_cache['mean']
+        var = self.forward_cache['var']
+        normalized_input = self.forward_cache['normalized']
+        d_output = next_layer_cache['dZ']
+        # Step 1: Compute gradients for gamma and beta
+        d_gamma = np.sum(d_output * normalized_input, axis=(0, 1, 2), keepdims=True)
+        d_normalized_input = d_output * self.weights
+
+        # Step 3: Compute gradients for mean and variance
+        d_var = np.sum(d_normalized_input * (self.forward_cache['input'] - mean) * -0.5 * np.power(var + self.epsilon, -1.5), axis=(0, 1, 2), keepdims=True)
+        d_mean = np.sum(d_normalized_input * -1 / np.sqrt(var + self.epsilon), axis=(0, 1, 2), keepdims=True) + d_var * np.sum(-2 * (self.forward_cache['input'] - mean), axis=(0, 1, 2), keepdims=True) / batch_size
+
+        # Step 4: Compute the gradient of the input
+        d_input = d_normalized_input / np.sqrt(var + self.epsilon) + d_var * 2 * (self.forward_cache['input'] - mean) / batch_size + d_mean / batch_size
+
+        # Store gradients in backward cache
+        self.backward_cache['dW'] = d_gamma
+        self.backward_cache['dZ'] = d_input
