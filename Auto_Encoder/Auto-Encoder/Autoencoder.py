@@ -139,7 +139,7 @@ class AutoEncoder:
             if (epoch+1) % self.loss_per_epochs == 0:
                 self.loss_curve.append(loss)
                 if self.check_point == True:
-                    self.save_model(file_path=f'model/check_points/check_point_epochs_{epoch+1}.npz')
+                    self.save_checkpoint(num = epoch+1)
             pbar.set_postfix_str(f"Loss={loss:.4f}")
 
     def _best_loss(self, loss):
@@ -172,39 +172,68 @@ class AutoEncoder:
         with open(file_path, 'w') as f:
             json.dump(hyper_params, f, indent=4)
 
+    def save_checkpoint(self, parent_path=None, num = 0):
+        if parent_path is None: 
+            parent_path = 'model/check_points'
+        os.makedirs(parent_path, exist_ok=True)
+        file_path = os.path.join(parent_path, f'checkpoint_epochs_{num}_weights.npz')
+        file_path_ = os.path.join(parent_path, f'check_point_epochs_{num}_bias.npz')
+        weights = self.autoencoder.parameters()
+        biases = self.autoencoder.intercept()
+        weights = [w if isinstance(w, np.ndarray) else np.array(w, dtype=np.float32) for w in weights]
+        biases = [b if isinstance(b, np.ndarray) else np.array(b, dtype=np.float32) for b in biases]
+        np.savez(file_path, *weights)
+        np.savez(file_path_, *biases)
+
     def save_model(self, file_path = None):
         if file_path is None: 
             parent_path = 'model/parameters'
             os.makedirs(parent_path, exist_ok=True)
             file_path = os.path.join(parent_path, 'model_weights.npz')
+            file_path_ = os.path.join(parent_path, 'model_bias.npz')
         weights = self.autoencoder.parameters()
+        biases = self.autoencoder.intercept()
         weights = [w if isinstance(w, np.ndarray) else np.array(w, dtype=np.float32) for w in weights]
+        biases = [b if isinstance(b, np.ndarray) else np.array(b, dtype=np.float32) for b in biases]
         np.savez(file_path, *weights)
-        if not self.check_point:
-            print(f"Model parameters is saved to {file_path}")
+        np.savez(file_path_, *biases)
+        print(f"Model parameters is saved to {file_path}")
 
-    def load_model(self, file_path = None):
-        if file_path is None:
+    def load_model(self, file_path_weights = None, file_path_bias = None):
+        if file_path_weights is None or file_path_bias is None:
             parent_path = 'model/parameters'
             os.makedirs(parent_path, exist_ok=True)
-            file_path = os.path.join(parent_path, 'model_weights.npz')
-        if not os.path.exists(file_path):
+            file_path_weights = os.path.join(parent_path, 'model_weights.npz')
+            file_path_bias = os.path.join(parent_path, "model_bias.npz")
+
+        if not os.path.exists(file_path_bias) or not os.path.exists(file_path_weights):
             raise FileNotFoundError(f"No saved model found at {file_path}")
 
         loaded_weights = np.load(file_path)
         weights = [loaded_weights[key] for key in loaded_weights.files]
 
         restored_weights = []
+
+        loaded_biases = np.load(file_path_)
+        biases = [loaded_biases[key] for key in loaded_biases.files]
+
+        restored_biases = []
+
         for w in weights:
             if w.shape == ():  
                 restored_weights.append(0)
             else:
                 restored_weights.append(w)
+        for b in biases:
+            if b.shape == ():
+                restored_biases.append(0)
+            else : 
+                restored_biases.append(b)
 
-        self.load(params=weights)
+        self.load(params=restored_weights, bias=restored_biases)
         print(f"Successfully loaded parameters from {file_path}")
 
-    def load(self, params):
+    def load(self, params, bias):
         '''
         This function will load trainable parameters into model. Use to reconstructed immediately without re-trianing the model.
         '''
@@ -213,6 +242,11 @@ class AutoEncoder:
                 self.autoencoder._layers[i].weights = params[i]
             else:
                 self.autoencoder._layers[i].weights = None
+            if isinstance(bias[i], np.ndarray) and bias[i].shape != ():
+                self.autoencoder._layers[i].bias = bias[i]
+            else:
+                self.autoencoder._layers[i].bias = None
+        
 
     def predict(self, input_img):
         return self.autoencoder.predict(input_img=input_img)
