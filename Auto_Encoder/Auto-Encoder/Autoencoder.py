@@ -109,8 +109,8 @@ class AutoEncoder:
         loss = 0
         
         if self.check_point == True and os.path.exists('model/check_points'):
-            self.save_hyper_params(file_path='model/check_points/hyperparameters.json', learning_rate=learning_rate, batch_size=batch_size, loss_per_epochs=loss_per_epochs, regularization=regularization, lambda_reg=lambda_reg, check_point=check_point)
             self.clear_checkpoint()
+            self.save_hyper_params(file_path='model/check_points/hyperparameters.json', epochs=epochs, learning_rate=learning_rate, batch_size=batch_size, loss_per_epochs=loss_per_epochs, regularization=regularization, lambda_reg=lambda_reg, check_point=check_point)
 
         # for epoch in tqdm(range(self.epochs), desc='Epochs'):
         for epoch in (pbar := tqdm(range(self.epochs), desc="Epochs")):
