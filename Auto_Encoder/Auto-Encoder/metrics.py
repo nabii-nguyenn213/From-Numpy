@@ -17,17 +17,13 @@ class MSELoss:
             sum_weights = 0
             for i in weights:
                 if isinstance(i, np.ndarray):
-                    continue
-                else:
-                    sum_weights += np.sum(i)
+                    sum_weights += np.sum(i ** 2)
             l2_term = self.lambda_reg * sum_weights
             return l2_term
         elif self.regularization == 'l1':
             sum_weights = 0
             for i in weights:
                 if isinstance(i, np.ndarray):
-                    continue
-                else:
                     sum_weights += np.sum(np.abs(i))
             l1_term = self.lambda_reg * sum_weights
             return l1_term
@@ -44,11 +40,9 @@ class MSELoss:
             return mse_loss
 
     def grad_loss(self, true_value, predict_value):   
-        true_value_flat = true_value.flatten()
-        predict_value_flat = predict_value.flatten()
-
-        grads = 2 * (predict_value_flat - true_value_flat) / true_value_flat.size
-        return grads 
+        grad = 2 * (predict_value - true_value) / np.prod(true_value.shape)
+        grad = np.clip(grad, -10, 10) 
+        return grad     
 
     def get_regularization_term(self, weights = None) -> list:
         if self.regularization == 'l1':
@@ -86,4 +80,5 @@ class Binary_Cross_Entropy(MSELoss):
         eps = 1e-12
         predict_value = np.clip(predict_value, eps, 1 - eps)
         grad = -(true_value / predict_value) + ((1 - true_value) / (1 - predict_value))
+        grad = np.clip(grad, -10, 10)
         return grad / true_value.size  

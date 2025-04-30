@@ -33,22 +33,23 @@ class Sequential:
     def forward_pass(self, input_img):
         if self._layers == []:
             return
+
         self.forward_caches = []
 
         self.forward_caches.append({'output' : input_img})
         
         output = self._layers[0].forward(input_img)
         # print("Forward pass: ")
-        # print("output layer 1 shape :", output)
+        # print("output layer 1 shape :", output.shape)
         self.forward_caches.append(self._layers[0].forward_cache)
         for layer in range(1, self.get_layer_length()):
             output = self._layers[layer].forward(output, input_shape=output.shape)
-            # print(f'output layer {layer + 1} shape :', output)
+            # print(f'output layer {layer + 1} shape :', output.shape)
             self.forward_caches.append(self._layers[layer].forward_cache)
         # print("Done forward pass")
         return output
     
-    def backpropagation(self, y_true, regularization_term=0):
+    def backpropagation(self, grad_loss, regularization_term=0):
         self.backward_caches = [None] * self.get_layer_length()
         y_pred = self.forward_caches[-1]['output']
         # print("Backward pass: ") 
@@ -57,7 +58,7 @@ class Sequential:
             # * i iterate from 7 -> 0
             if i == self.get_layer_length() - 1: 
                 # ? output layer
-                self._layers[i].backprop(previous_layer_cache=self.forward_caches[i], next_layer_cache=None, weights_next_layer=None, output_layer=y_pred-y_true)
+                self._layers[i].backprop(previous_layer_cache=self.forward_caches[i], next_layer_cache=None, weights_next_layer=None, output_layer=grad_loss)
                 self.backward_caches[i] = self._layers[i].backward_cache
             else:
                 # ? hidden layers
@@ -68,11 +69,11 @@ class Sequential:
             for i in range(self.get_layer_length()):
                 if self._layers[i].weights is not None:
                     self.backward_caches[i]['dW'] += regularization_term[i]
-                    
+
     def predict(self, input_img):
+        if self._layers == []:
+            return
         output = self._layers[0].forward(input_img, input_shape=-1, predict=True)
-        
         for layer in range(1, self.get_layer_length()):
             output = self._layers[layer].forward(output, input_shape=output.shape, predict=True)
         return output
-    
