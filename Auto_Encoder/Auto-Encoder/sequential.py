@@ -29,6 +29,15 @@ class Sequential:
             else:
                 weights.append(0)
         return weights
+
+    def intercept(self):
+        biases = []
+        for i in range(self.get_layer_length()):
+            if self._layers[i].bias is not None:
+                biases.append(self._layers[i].bias)
+            else:
+                biases.append(0)
+        return biases
     
     def forward_pass(self, input_img):
         if self._layers == []:
